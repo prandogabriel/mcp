@@ -5,7 +5,6 @@ import {
   ProtocolErrorCode,
   requireScopes,
   ResourceTemplate as SdkResourceTemplate,
-  type AuthInfo,
   type CallToolResult,
   type GetPromptResult,
   type InputRequiredResult,
@@ -13,8 +12,9 @@ import {
   type ScopeChallengeHandler,
   type ServerContext,
 } from '@modelcontextprotocol/server';
-import type { McpCallKind, McpContext, McpProtocolEra } from '../interfaces/mcp-context.interface.js';
+import type { McpCallKind, McpContext } from '../interfaces/mcp-context.interface.js';
 import type { McpModuleOptions } from '../interfaces/mcp-module-options.interface.js';
+import type { McpPrimitives, McpServing } from '../interfaces/mcp-serving.interface.js';
 import { MCP_MODULE_OPTIONS } from '../mcp.constants.js';
 import { McpObserve } from '../observe/mcp-observe.service.js';
 import { INTERNAL_ERROR_MESSAGE, toolErrorResult, toProtocolError } from '../utils/errors.util.js';
@@ -27,24 +27,16 @@ import {
   type McpToolEntry,
 } from './mcp-registry.service.js';
 
-/** What a server instance serves: one HTTP request, or one stdio connection. */
-export interface McpServing {
-  era: McpProtocolEra;
-  transport: 'http' | 'stdio';
-  authInfo?: AuthInfo;
-  /** The web-standard request (HTTP). */
-  requestInfo?: Request;
-  /** The HTTP platform's request (HTTP through the endpoint's route). */
-  request?: unknown;
-}
+export type { McpServing };
 
 type ToolCallback = (args: unknown, ctx: ServerContext) => Promise<CallToolResult | InputRequiredResult>;
 type ToolCallbackWithoutArgs = (ctx: ServerContext) => Promise<CallToolResult | InputRequiredResult>;
 
 /**
  * Builds the SDK server instances: one per HTTP request (`createMcpHandler()`), one per stdio connection
- * (`serveStdio()`), each with every primitive of the registry, whose callbacks run the methods through Nest's
- * enhancers. Building one costs a registration per primitive; schemas were checked and converted at startup.
+ * (`serveStdio()`), each with the primitives of the registry the `filter` option picks (all of them without it), whose
+ * callbacks run the methods through Nest's enhancers. Building one costs a registration per primitive; schemas were
+ * checked and converted at startup.
  */
 @Injectable()
 export class McpServerFactory {
@@ -56,7 +48,8 @@ export class McpServerFactory {
     @Inject(MCP_MODULE_OPTIONS) private readonly options: McpModuleOptions,
   ) {}
 
-  create(serving: McpServing): McpServer {
+  async create(serving: McpServing): Promise<McpServer> {
+    const primitives = await this.select(serving);
     const { name, version, title, description, websiteUrl, icons, instructions } = this.options;
     const server = new McpServer(
       {
@@ -70,10 +63,10 @@ export class McpServerFactory {
       { ...(instructions !== undefined && { instructions }) },
     );
 
-    for (const tool of this.registry.tools) {
+    for (const tool of primitives.tools) {
       this.registerTool(server, tool, serving);
     }
-    for (const resource of this.registry.resources) {
+    for (const resource of primitives.resources) {
       const { title, description, mimeType, size, annotations, icons, _meta, cacheHint } = resource.options;
       server.registerResource(
         resource.name,
@@ -85,7 +78,7 @@ export class McpServerFactory {
         (uri, ctx) => this.readResource(resource, {}, uri, ctx, serving),
       );
     }
-    for (const template of this.registry.resourceTemplates) {
+    for (const template of primitives.resourceTemplates) {
       const { title, description, mimeType, annotations, icons, _meta, cacheHint } = template.options;
       server.registerResource(
         template.name,
@@ -97,10 +90,31 @@ export class McpServerFactory {
         (uri, variables, ctx) => this.readResource(template, variables, uri, ctx, serving),
       );
     }
-    for (const prompt of this.registry.prompts) {
+    for (const prompt of primitives.prompts) {
       this.registerPrompt(server, prompt, serving);
     }
+    await this.options.onServerCreated?.(server, serving);
     return server;
+  }
+
+  /** The registry's primitives the `filter` option keeps for `serving`; all of them without it. */
+  private async select(serving: McpServing): Promise<McpPrimitives> {
+    const all: McpPrimitives = {
+      tools: [...this.registry.tools],
+      resources: [...this.registry.resources],
+      resourceTemplates: [...this.registry.resourceTemplates],
+      prompts: [...this.registry.prompts],
+    };
+    if (!this.options.filter) {
+      return all;
+    }
+    const kept = await this.options.filter(all, serving);
+    return {
+      tools: subset(all.tools, kept?.tools, 'tools'),
+      resources: subset(all.resources, kept?.resources, 'resources'),
+      resourceTemplates: subset(all.resourceTemplates, kept?.resourceTemplates, 'resourceTemplates'),
+      prompts: subset(all.prompts, kept?.prompts, 'prompts'),
+    };
   }
 
   private registerTool(server: McpServer, tool: McpToolEntry, serving: McpServing) {
@@ -239,6 +253,27 @@ export class McpServerFactory {
       },
     };
   }
+}
+
+/**
+ * The entries of `kept`, which must come from `all`: an entry made up by the filter would carry a handler that Nest's
+ * enhancers never wrapped.
+ */
+function subset<T>(all: readonly T[], kept: readonly T[] | undefined, key: keyof McpPrimitives): readonly T[] {
+  if (kept === undefined) {
+    return all;
+  }
+  if (!Array.isArray(kept)) {
+    throw new TypeError(`McpModule: the \`filter\` option returned \`${key}\` that is not an array.`);
+  }
+  const known = new Set(all);
+  if (kept.some((entry) => !known.has(entry))) {
+    throw new TypeError(
+      `McpModule: the \`filter\` option returned an entry in \`${key}\` it was not given. ` +
+        'Return a subset of what it receives.',
+    );
+  }
+  return kept;
 }
 
 function scopeChallenge(scopes: string[] | undefined): { scopeChallenge?: ScopeChallengeHandler } {

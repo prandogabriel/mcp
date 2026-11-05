@@ -1,5 +1,6 @@
 import type { ControllerOptions, ModuleMetadata, Type } from '@nestjs/common';
-import type { Icon } from '@modelcontextprotocol/server';
+import type { Icon, McpServer } from '@modelcontextprotocol/server';
+import type { McpPrimitives, McpServing } from './mcp-serving.interface.js';
 import type { McpTokenVerifier } from './mcp-token-verifier.interface.js';
 
 /** How the Streamable HTTP endpoint serves requests. */
@@ -93,6 +94,24 @@ export interface McpModuleOptions {
    * application.
    */
   include?: Function[];
+  /**
+   * Picks the primitives one HTTP request or stdio connection is served, before its server instance registers them:
+   * a primitive left out is neither listed nor callable there (a call to it gets the SDK's unknown-tool, -prompt or
+   * -resource error, before any guard runs). It receives every primitive the application declares and returns subsets
+   * of them; a key it leaves out keeps all of its kind. For what a token's scopes do not cover, `scopes` lists the
+   * primitive and challenges the call (step-up authorization); `filter` hides it, for feature flags, tenants or
+   * clients that cannot ask for more scopes. Called once per request (HTTP) or connection (stdio); when it throws,
+   * the request fails rather than being served everything.
+   */
+  filter?: (
+    primitives: McpPrimitives,
+    serving: McpServing,
+  ) => Partial<McpPrimitives> | Promise<Partial<McpPrimitives>>;
+  /**
+   * Called with each server instance once it has registered its primitives, before it serves its request or
+   * connection: for libraries that wrap an `McpServer` (analytics, tracing). When it throws, the request fails.
+   */
+  onServerCreated?: (server: McpServer, serving: McpServing) => void | Promise<void>;
   http?: McpHttpOptions;
   /** OAuth for the HTTP endpoint. Without it, the endpoint accepts every request its route lets through. */
   auth?: McpAuthOptions;

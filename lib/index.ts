@@ -11,6 +11,8 @@ export type {
   McpHttpOptions,
   McpModuleOptions,
   McpModuleStructure,
+  McpPrimitives,
+  McpServing,
   McpStdioOptions,
 } from './interfaces/index.js';
 
@@ -38,4 +40,10 @@ export { McpHttpService } from './http/mcp-http.service.js';
 export { McpStdioLogger, McpStdioServer, type McpStdioListenOptions } from './stdio/index.js';
 
 // The discovered primitives, for inspection
-export { McpRegistry } from './services/mcp-registry.service.js';
+export {
+  McpRegistry,
+  type McpPromptEntry,
+  type McpResourceEntry,
+  type McpResourceTemplateEntry,
+  type McpToolEntry,
+} from './services/mcp-registry.service.js';

@@ -75,7 +75,7 @@ export class McpHttpService implements OnModuleInit, OnApplicationShutdown {
     this.handler = createMcpHandler(
       async ({ era, authInfo, requestInfo }) => {
         try {
-          return factory.create({
+          return await factory.create({
             era,
             transport: 'http',
             authInfo,
